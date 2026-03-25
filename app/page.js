@@ -671,7 +671,7 @@ function LoginScreen({
               required
               value={loginForm.email}
               onChange={(event) => onFieldChange("email", event.target.value)}
-              placeholder="admin atau kasir1"
+              placeholder="admin atau barista"
             />
           </div>
 
