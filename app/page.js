@@ -25,8 +25,8 @@ import {
 } from "@/lib/store";
 
 const DEFAULT_LOGIN_FORM = {
-  email: "admin",
-  password: "admin123",
+  email: "",
+  password: "",
   branchId: "branch-1",
 };
 
@@ -695,9 +695,8 @@ function LoginScreen({
         </form>
 
         <div className="login-help">
-          <strong>Akun demo</strong>
-          <p>`admin / admin123` untuk dashboard admin.</p>
-          <p>`kasir1 / kasir123` atau `kasir2 / kasir123` untuk layar kasir.</p>
+          <strong>Akses login</strong>
+          <p>Gunakan akun operasional yang sudah disiapkan untuk cabang terkait.</p>
         </div>
       </div>
     </div>
