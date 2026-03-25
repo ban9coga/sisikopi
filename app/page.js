@@ -4,8 +4,10 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import logoImage from "@/logo.png";
 import {
+  addUser,
   addProduct,
   createOrder,
+  deleteUser,
   deleteProduct,
   formatDate,
   formatRupiah,
@@ -17,9 +19,12 @@ import {
   getProducts,
   getSummaryByRange,
   getTodayOrders,
+  getUsers,
   initializeData,
   login,
   logout,
+  setCurrentUserSession,
+  updateUser,
   updateOrderStatus,
   updateProduct,
 } from "@/lib/store";
@@ -31,6 +36,7 @@ const DEFAULT_LOGIN_FORM = {
 };
 
 const DEFAULT_PRODUCT_CATEGORY = "kopi";
+const DEFAULT_USER_ROLE = "kasir";
 const ORDER_STATUSES = ["pending", "processing", "done"];
 const ORDER_STATUS_META = {
   pending: {
@@ -77,6 +83,26 @@ function createEmptyOptionGroup() {
     group: "",
     label: "",
     choices: [createEmptyChoice()],
+  };
+}
+
+function createEmptyUserDraft(defaultBranchId = "branch-1") {
+  return {
+    name: "",
+    email: "",
+    role: DEFAULT_USER_ROLE,
+    branchId: defaultBranchId,
+    password: "",
+  };
+}
+
+function createUserDraft(user) {
+  return {
+    name: user.name || "",
+    email: user.email || "",
+    role: user.role || DEFAULT_USER_ROLE,
+    branchId: user.branchId || "branch-1",
+    password: "",
   };
 }
 
@@ -227,6 +253,42 @@ function getProductScopeLabel(product, branches) {
   }
 
   return branches.find((branch) => branch.id === product.branchId)?.name || "Cabang khusus";
+}
+
+function getUserRoleLabel(role) {
+  return role === "admin" ? "Admin" : "Barista";
+}
+
+function normalizeUserDraft(draft, defaultBranchId) {
+  const name = String(draft.name || "").trim();
+  const email = String(draft.email || "").trim().toLowerCase();
+  const role = draft.role === "admin" ? "admin" : "kasir";
+  const branchId = String(draft.branchId || defaultBranchId || "").trim();
+  const password = String(draft.password || "");
+
+  if (!name) {
+    throw new Error("Nama akun wajib diisi.");
+  }
+
+  if (!email) {
+    throw new Error("Username wajib diisi.");
+  }
+
+  if (!/^[a-z0-9._-]+$/.test(email)) {
+    throw new Error("Username hanya boleh huruf kecil, angka, titik, underscore, atau minus.");
+  }
+
+  if (!branchId) {
+    throw new Error("Cabang akun wajib dipilih.");
+  }
+
+  return {
+    name,
+    email,
+    role,
+    branchId,
+    password,
+  };
 }
 
 function getOrderStatusMeta(status) {
@@ -730,14 +792,18 @@ function OrderWorkflowActions({ order, isSubmitting, onStatusChange }) {
 }
 
 function AdminScreen({
+  currentUser,
   branchName,
   currentBranchId,
   branches,
+  users,
   products,
   summary,
   todayOrders,
   isSubmitting,
   onLogout,
+  onSaveUser,
+  onDeleteUser,
   onSaveProduct,
   onDeleteProduct,
   onOrderStatusChange,
@@ -756,6 +822,11 @@ function AdminScreen({
     createEmptyProductDraft(currentBranchId),
   );
   const [formError, setFormError] = useState("");
+  const [editingUserId, setEditingUserId] = useState("");
+  const [userDraft, setUserDraft] = useState(() =>
+    createEmptyUserDraft(currentBranchId),
+  );
+  const [userFormError, setUserFormError] = useState("");
   const [reportMode, setReportMode] = useState("single");
   const [reportDate, setReportDate] = useState(todayDate);
   const [reportRange, setReportRange] = useState({
@@ -860,6 +931,12 @@ function AdminScreen({
     setFormError("");
   }
 
+  function resetUserForm() {
+    setEditingUserId("");
+    setUserDraft(createEmptyUserDraft(currentBranchId));
+    setUserFormError("");
+  }
+
   function handleReportModeChange(nextMode) {
     setReportMode(nextMode);
     if (nextMode === "single") {
@@ -896,8 +973,38 @@ function AdminScreen({
     }
   }
 
+  function validateUserAgainstCatalog(userData) {
+    const normalizedEmail = userData.email.trim().toLowerCase();
+    const duplicateUser = users.find((user) => {
+      if (user.id === editingUserId) {
+        return false;
+      }
+
+      return user.email.trim().toLowerCase() === normalizedEmail;
+    });
+
+    if (duplicateUser) {
+      throw new Error("Username sudah dipakai akun lain.");
+    }
+
+    if (!editingUserId && userData.password.length < 8) {
+      throw new Error("Password akun minimal 8 karakter.");
+    }
+
+    if (editingUserId && userData.password && userData.password.length < 8) {
+      throw new Error("Password baru minimal 8 karakter.");
+    }
+  }
+
   function handleDraftChange(field, value) {
     setProductDraft((currentDraft) => ({
+      ...currentDraft,
+      [field]: value,
+    }));
+  }
+
+  function handleUserDraftChange(field, value) {
+    setUserDraft((currentDraft) => ({
       ...currentDraft,
       [field]: value,
     }));
@@ -987,6 +1094,12 @@ function AdminScreen({
     setFormError("");
   }
 
+  function handleEditUser(user) {
+    setEditingUserId(user.id);
+    setUserDraft(createUserDraft(user));
+    setUserFormError("");
+  }
+
   async function handleSubmitProduct(event) {
     event.preventDefault();
     setFormError("");
@@ -1016,6 +1129,43 @@ function AdminScreen({
       }
     } catch (deleteError) {
       setFormError(deleteError.message || "Menu gagal dihapus.");
+    }
+  }
+
+  async function handleSubmitUser(event) {
+    event.preventDefault();
+    setUserFormError("");
+
+    try {
+      const nextUser = normalizeUserDraft(userDraft, currentBranchId);
+      validateUserAgainstCatalog(nextUser);
+      await onSaveUser(nextUser, editingUserId || null);
+      resetUserForm();
+    } catch (submitError) {
+      setUserFormError(submitError.message || "Akun gagal disimpan.");
+    }
+  }
+
+  async function handleDeleteUser(user) {
+    if (user.id === currentUser.id) {
+      setUserFormError("Akun yang sedang aktif tidak bisa dihapus.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Hapus akun ${user.name} (${user.email})? Tindakan ini tidak bisa dibatalkan.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await onDeleteUser(user.id);
+      if (editingUserId === user.id) {
+        resetUserForm();
+      }
+    } catch (deleteError) {
+      setUserFormError(deleteError.message || "Akun gagal dihapus.");
     }
   }
 
@@ -1069,6 +1219,165 @@ function AdminScreen({
 
       <section className="page-grid">
         <div className="section-stack">
+          <article className="card">
+            <div className="card-heading">
+              <h2>{editingUserId ? "Edit Akun" : "Tambah Akun Baru"}</h2>
+              <p>Kelola akun admin dan barista untuk tiap cabang langsung dari dashboard.</p>
+            </div>
+
+            {userFormError ? (
+              <div className="status-banner is-error">{userFormError}</div>
+            ) : null}
+
+            <form className="product-form" onSubmit={handleSubmitUser}>
+              <div className="product-form-grid">
+                <div className="form-group">
+                  <label htmlFor="user-name">Nama Lengkap</label>
+                  <input
+                    id="user-name"
+                    className="input"
+                    required
+                    value={userDraft.name}
+                    onChange={(event) => handleUserDraftChange("name", event.target.value)}
+                    placeholder="Misal: Owner Sutomo"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="user-email">Username</label>
+                  <input
+                    id="user-email"
+                    className="input"
+                    required
+                    value={userDraft.email}
+                    onChange={(event) => handleUserDraftChange("email", event.target.value)}
+                    placeholder="owner.sutomo"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="user-role">Role</label>
+                  <select
+                    id="user-role"
+                    className="input"
+                    value={userDraft.role}
+                    onChange={(event) => handleUserDraftChange("role", event.target.value)}
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="kasir">Barista</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="user-branch">Cabang</label>
+                  <select
+                    id="user-branch"
+                    className="input"
+                    value={userDraft.branchId}
+                    onChange={(event) => handleUserDraftChange("branchId", event.target.value)}
+                  >
+                    {branches.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group product-form-full">
+                  <label htmlFor="user-password">
+                    {editingUserId ? "Password Baru" : "Password"}
+                  </label>
+                  <input
+                    id="user-password"
+                    type="password"
+                    className="input"
+                    value={userDraft.password}
+                    onChange={(event) => handleUserDraftChange("password", event.target.value)}
+                    placeholder={
+                      editingUserId
+                        ? "Kosongkan jika tidak ingin mengganti password"
+                        : "Minimal 8 karakter"
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="product-form-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={resetUserForm}
+                >
+                  {editingUserId ? "Batal Edit" : "Reset Form"}
+                </button>
+                <button className="btn btn-primary" disabled={isSubmitting}>
+                  {isSubmitting
+                    ? "Menyimpan..."
+                    : editingUserId
+                      ? "Simpan Akun"
+                      : "Tambah Akun"}
+                </button>
+              </div>
+            </form>
+
+            <div className="table-wrap">
+              <table className="menu-table account-table">
+                <thead>
+                  <tr>
+                    <th>Nama</th>
+                    <th>Username</th>
+                    <th>Role</th>
+                    <th>Cabang</th>
+                    <th>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr key={user.id}>
+                      <td>
+                        <div className="menu-row-title">
+                          <div>
+                            <div>{user.name}</div>
+                            <div className="helper-text">
+                              {user.id === currentUser.id ? "Akun aktif" : "Akun operasional"}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{user.email}</td>
+                      <td>
+                        <span className={`badge ${user.role === "admin" ? "badge-accent" : "badge-info"}`}>
+                          {getUserRoleLabel(user.role)}
+                        </span>
+                      </td>
+                      <td>{getProductScopeLabel({ branchId: user.branchId }, branches)}</td>
+                      <td>
+                        <div className="table-actions">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleEditUser(user)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            disabled={user.id === currentUser.id}
+                            onClick={() => handleDeleteUser(user)}
+                          >
+                            Hapus
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </article>
+
           <article className="card">
             <div className="card-heading">
               <h2>{editingProductId ? "Edit Menu" : "Tambah Menu Baru"}</h2>
@@ -1930,6 +2239,7 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [branches, setBranches] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
+  const [users, setUsers] = useState([]);
   const [products, setProducts] = useState([]);
   const [todayOrders, setTodayOrders] = useState([]);
   const [summary, setSummary] = useState(() => createEmptySummary());
@@ -2029,17 +2339,20 @@ export default function Home() {
     setCurrentUser(nextSession);
 
     if (!nextSession) {
+      setUsers([]);
       setProducts([]);
       setTodayOrders([]);
       setSummary(createEmptySummary());
       return;
     }
 
-    const [nextProducts, nextOrdersData, nextSummary] = await Promise.all([
+    const [nextUsers, nextProducts, nextOrdersData, nextSummary] = await Promise.all([
+      nextSession.role === "admin" ? getUsers() : Promise.resolve([]),
       getProducts(nextSession.branchId),
       getTodayOrders(nextSession.branchId),
       getDailySummary(nextSession.branchId),
     ]);
+    setUsers(nextUsers || []);
     const normalizedProducts = nextProducts || [];
     const nextOrders = sortOrdersByWorkflow(nextOrdersData || []);
 
@@ -2267,6 +2580,73 @@ export default function Home() {
     }
   }
 
+  async function handleSaveUser(userData, userId) {
+    if (!currentUser) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    clearFeedback();
+
+    try {
+      let nextSession = currentUser;
+      if (userId) {
+        await updateUser(userId, userData);
+        if (userId === currentUser.id) {
+          nextSession = setCurrentUserSession({
+            ...currentUser,
+            name: userData.name,
+            email: userData.email,
+            role: userData.role,
+            branchId: userData.branchId,
+          });
+        }
+        reportNotice(`Akun ${userData.name} berhasil diperbarui.`, {
+          title: "Akun diperbarui",
+        });
+      } else {
+        await addUser(userData);
+        reportNotice(`Akun ${userData.name} berhasil ditambahkan.`, {
+          title: "Akun ditambahkan",
+        });
+      }
+
+      await refreshSessionData(nextSession);
+    } catch (userError) {
+      reportError(userError.message || "Perubahan akun gagal disimpan.");
+      throw userError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeleteUser(userId) {
+    if (!currentUser) {
+      return;
+    }
+
+    if (userId === currentUser.id) {
+      reportError("Akun yang sedang aktif tidak bisa dihapus.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    clearFeedback();
+
+    try {
+      await deleteUser(userId);
+      await refreshSessionData(currentUser);
+      reportNotice("Akun berhasil dihapus.", {
+        title: "Akun dihapus",
+      });
+    } catch (userError) {
+      reportError(userError.message || "Akun gagal dihapus.");
+      throw userError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleDeleteProduct(productId) {
     if (!currentUser) {
       return;
@@ -2406,14 +2786,18 @@ export default function Home() {
     return (
       <>
         <AdminScreen
+          currentUser={currentUser}
           branchName={currentBranch?.name || "Cabang"}
           currentBranchId={currentUser.branchId}
           branches={branches}
+          users={users}
           products={products}
           summary={summary}
           todayOrders={todayOrders}
           isSubmitting={isSubmitting}
           onLogout={handleLogout}
+          onSaveUser={handleSaveUser}
+          onDeleteUser={handleDeleteUser}
           onSaveProduct={handleSaveProduct}
           onDeleteProduct={handleDeleteProduct}
           onOrderStatusChange={handleOrderStatusChange}

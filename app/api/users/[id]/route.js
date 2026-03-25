@@ -1,7 +1,4 @@
-import {
-  deleteProductRecord,
-  updateProductRecord,
-} from "@/lib/supabase/repository";
+import { deleteUserRecord, updateUserRecord } from "@/lib/supabase/repository";
 import { isSupabaseServerEnabled } from "@/lib/supabase/server";
 import { jsonError, jsonOk } from "@/lib/server/http";
 
@@ -15,10 +12,10 @@ export async function PATCH(request, context) {
   try {
     const { id } = await context.params;
     const body = await request.json();
-    await updateProductRecord(id, body);
+    await updateUserRecord(id, body);
     return jsonOk({ ok: true });
   } catch (error) {
-    return jsonError(error.message || "Produk gagal diperbarui.");
+    return jsonError(error.message || "Akun gagal diperbarui.");
   }
 }
 
@@ -29,9 +26,9 @@ export async function DELETE(_request, context) {
 
   try {
     const { id } = await context.params;
-    await deleteProductRecord(id);
+    await deleteUserRecord(id);
     return jsonOk({ ok: true });
   } catch (error) {
-    return jsonError(error.message || "Produk gagal dihapus.");
+    return jsonError(error.message || "Akun gagal dihapus.");
   }
 }

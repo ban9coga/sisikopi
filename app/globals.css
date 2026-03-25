@@ -928,6 +928,10 @@ select.input {
   gap: 16px;
 }
 
+.product-form-full {
+  grid-column: 1 / -1;
+}
+
 .product-form-grid-tight {
   gap: 12px;
 }
@@ -1024,6 +1028,10 @@ select.input {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.account-table {
+  margin-top: 20px;
 }
 
 /* ===== Laporan ===== */
