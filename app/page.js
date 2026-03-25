@@ -4,9 +4,11 @@ import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import logoImage from "@/logo.png";
 import {
+  addBranch,
   addUser,
   addProduct,
   createOrder,
+  deleteBranch,
   deleteUser,
   deleteProduct,
   formatDate,
@@ -23,6 +25,7 @@ import {
   initializeData,
   login,
   logout,
+  updateBranch,
   setCurrentUserSession,
   updateUser,
   updateOrderStatus,
@@ -96,6 +99,13 @@ function createEmptyUserDraft(defaultBranchId = "branch-1") {
   };
 }
 
+function createEmptyBranchDraft() {
+  return {
+    name: "",
+    address: "",
+  };
+}
+
 function createUserDraft(user) {
   return {
     name: user.name || "",
@@ -103,6 +113,13 @@ function createUserDraft(user) {
     role: user.role || DEFAULT_USER_ROLE,
     branchId: user.branchId || "branch-1",
     password: "",
+  };
+}
+
+function createBranchDraft(branch) {
+  return {
+    name: branch.name || "",
+    address: branch.address || "",
   };
 }
 
@@ -289,6 +306,21 @@ function normalizeUserDraft(draft, defaultBranchId) {
     branchId,
     password,
   };
+}
+
+function normalizeBranchDraft(draft) {
+  const name = String(draft.name || "").trim();
+  const address = String(draft.address || "").trim();
+
+  if (!name) {
+    throw new Error("Nama cabang wajib diisi.");
+  }
+
+  if (name.length > 60) {
+    throw new Error("Nama cabang maksimal 60 karakter.");
+  }
+
+  return { name, address };
 }
 
 function getOrderStatusMeta(status) {
@@ -802,6 +834,8 @@ function AdminScreen({
   todayOrders,
   isSubmitting,
   onLogout,
+  onSaveBranch,
+  onDeleteBranch,
   onSaveUser,
   onDeleteUser,
   onSaveProduct,
@@ -827,6 +861,9 @@ function AdminScreen({
     createEmptyUserDraft(currentBranchId),
   );
   const [userFormError, setUserFormError] = useState("");
+  const [editingBranchId, setEditingBranchId] = useState("");
+  const [branchDraft, setBranchDraft] = useState(() => createEmptyBranchDraft());
+  const [branchFormError, setBranchFormError] = useState("");
   const [reportMode, setReportMode] = useState("single");
   const [reportDate, setReportDate] = useState(todayDate);
   const [reportRange, setReportRange] = useState({
@@ -937,6 +974,12 @@ function AdminScreen({
     setUserFormError("");
   }
 
+  function resetBranchForm() {
+    setEditingBranchId("");
+    setBranchDraft(createEmptyBranchDraft());
+    setBranchFormError("");
+  }
+
   function handleReportModeChange(nextMode) {
     setReportMode(nextMode);
     if (nextMode === "single") {
@@ -996,6 +1039,21 @@ function AdminScreen({
     }
   }
 
+  function validateBranchAgainstCatalog(branchData) {
+    const normalizedName = branchData.name.trim().toLowerCase();
+    const duplicateBranch = branches.find((branch) => {
+      if (branch.id === editingBranchId) {
+        return false;
+      }
+
+      return branch.name.trim().toLowerCase() === normalizedName;
+    });
+
+    if (duplicateBranch) {
+      throw new Error("Nama cabang sudah dipakai.");
+    }
+  }
+
   function handleDraftChange(field, value) {
     setProductDraft((currentDraft) => ({
       ...currentDraft,
@@ -1005,6 +1063,13 @@ function AdminScreen({
 
   function handleUserDraftChange(field, value) {
     setUserDraft((currentDraft) => ({
+      ...currentDraft,
+      [field]: value,
+    }));
+  }
+
+  function handleBranchDraftChange(field, value) {
+    setBranchDraft((currentDraft) => ({
       ...currentDraft,
       [field]: value,
     }));
@@ -1100,6 +1165,12 @@ function AdminScreen({
     setUserFormError("");
   }
 
+  function handleEditBranch(branch) {
+    setEditingBranchId(branch.id);
+    setBranchDraft(createBranchDraft(branch));
+    setBranchFormError("");
+  }
+
   async function handleSubmitProduct(event) {
     event.preventDefault();
     setFormError("");
@@ -1146,6 +1217,20 @@ function AdminScreen({
     }
   }
 
+  async function handleSubmitBranch(event) {
+    event.preventDefault();
+    setBranchFormError("");
+
+    try {
+      const nextBranch = normalizeBranchDraft(branchDraft);
+      validateBranchAgainstCatalog(nextBranch);
+      await onSaveBranch(nextBranch, editingBranchId || null);
+      resetBranchForm();
+    } catch (submitError) {
+      setBranchFormError(submitError.message || "Cabang gagal disimpan.");
+    }
+  }
+
   async function handleDeleteUser(user) {
     if (user.id === currentUser.id) {
       setUserFormError("Akun yang sedang aktif tidak bisa dihapus.");
@@ -1166,6 +1251,29 @@ function AdminScreen({
       }
     } catch (deleteError) {
       setUserFormError(deleteError.message || "Akun gagal dihapus.");
+    }
+  }
+
+  async function handleDeleteBranch(branch) {
+    if (branch.id === currentBranchId) {
+      setBranchFormError("Cabang yang sedang aktif tidak bisa dihapus.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Hapus cabang ${branch.name}? Tindakan ini tidak bisa dibatalkan.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await onDeleteBranch(branch.id);
+      if (editingBranchId === branch.id) {
+        resetBranchForm();
+      }
+    } catch (deleteError) {
+      setBranchFormError(deleteError.message || "Cabang gagal dihapus.");
     }
   }
 
@@ -1219,6 +1327,114 @@ function AdminScreen({
 
       <section className="page-grid">
         <div className="section-stack">
+          <article className="card">
+            <div className="card-heading">
+              <h2>{editingBranchId ? "Edit Cabang" : "Tambah Cabang Baru"}</h2>
+              <p>Kelola daftar cabang yang muncul di login, akun, dan laporan admin.</p>
+            </div>
+
+            {branchFormError ? (
+              <div className="status-banner is-error">{branchFormError}</div>
+            ) : null}
+
+            <form className="product-form" onSubmit={handleSubmitBranch}>
+              <div className="product-form-grid">
+                <div className="form-group">
+                  <label htmlFor="branch-name">Nama Cabang</label>
+                  <input
+                    id="branch-name"
+                    className="input"
+                    required
+                    maxLength={60}
+                    value={branchDraft.name}
+                    onChange={(event) => handleBranchDraftChange("name", event.target.value)}
+                    placeholder="Misal: Cabang Sutomo"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="branch-address">Alamat / Area</label>
+                  <input
+                    id="branch-address"
+                    className="input"
+                    value={branchDraft.address}
+                    onChange={(event) => handleBranchDraftChange("address", event.target.value)}
+                    placeholder="Misal: Padang"
+                  />
+                </div>
+              </div>
+
+              <div className="product-form-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={resetBranchForm}
+                >
+                  {editingBranchId ? "Batal Edit" : "Reset Form"}
+                </button>
+                <button className="btn btn-primary" disabled={isSubmitting}>
+                  {isSubmitting
+                    ? "Menyimpan..."
+                    : editingBranchId
+                      ? "Simpan Cabang"
+                      : "Tambah Cabang"}
+                </button>
+              </div>
+            </form>
+
+            <div className="table-wrap">
+              <table className="menu-table branch-table">
+                <thead>
+                  <tr>
+                    <th>Cabang</th>
+                    <th>Alamat</th>
+                    <th>Status</th>
+                    <th>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {branches.map((branch) => (
+                    <tr key={branch.id}>
+                      <td>
+                        <div className="menu-row-title">
+                          <div>
+                            <div>{branch.name}</div>
+                            <div className="helper-text">ID {branch.id}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{branch.address || "-"}</td>
+                      <td>
+                        <span className={`badge ${branch.id === currentBranchId ? "badge-accent" : "badge-info"}`}>
+                          {branch.id === currentBranchId ? "Cabang aktif" : "Tersedia"}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="table-actions">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleEditBranch(branch)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            disabled={branch.id === currentBranchId}
+                            onClick={() => handleDeleteBranch(branch)}
+                          >
+                            Hapus
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </article>
+
           <article className="card">
             <div className="card-heading">
               <h2>{editingUserId ? "Edit Akun" : "Tambah Akun Baru"}</h2>
@@ -2620,6 +2836,67 @@ export default function Home() {
     }
   }
 
+  async function handleSaveBranch(branchData, branchId) {
+    if (!currentUser) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    clearFeedback();
+
+    try {
+      if (branchId) {
+        await updateBranch(branchId, branchData);
+        reportNotice(`Cabang ${branchData.name} berhasil diperbarui.`, {
+          title: "Cabang diperbarui",
+        });
+      } else {
+        await addBranch(branchData);
+        reportNotice(`Cabang ${branchData.name} berhasil ditambahkan.`, {
+          title: "Cabang ditambahkan",
+        });
+      }
+
+      const nextBranches = await getBranches();
+      setBranches(nextBranches);
+      await refreshSessionData(currentUser);
+    } catch (branchError) {
+      reportError(branchError.message || "Perubahan cabang gagal disimpan.");
+      throw branchError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeleteBranch(branchId) {
+    if (!currentUser) {
+      return;
+    }
+
+    if (branchId === currentUser.branchId) {
+      reportError("Cabang yang sedang aktif tidak bisa dihapus.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    clearFeedback();
+
+    try {
+      await deleteBranch(branchId);
+      const nextBranches = await getBranches();
+      setBranches(nextBranches);
+      await refreshSessionData(currentUser);
+      reportNotice("Cabang berhasil dihapus.", {
+        title: "Cabang dihapus",
+      });
+    } catch (branchError) {
+      reportError(branchError.message || "Cabang gagal dihapus.");
+      throw branchError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleDeleteUser(userId) {
     if (!currentUser) {
       return;
@@ -2796,6 +3073,8 @@ export default function Home() {
           todayOrders={todayOrders}
           isSubmitting={isSubmitting}
           onLogout={handleLogout}
+          onSaveBranch={handleSaveBranch}
+          onDeleteBranch={handleDeleteBranch}
           onSaveUser={handleSaveUser}
           onDeleteUser={handleDeleteUser}
           onSaveProduct={handleSaveProduct}

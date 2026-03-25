@@ -1034,6 +1034,10 @@ select.input {
   margin-top: 20px;
 }
 
+.branch-table {
+  margin-top: 20px;
+}
+
 /* ===== Laporan ===== */
 .report-filters {
   display: flex;
