@@ -1,0 +1,8 @@
+<svg width="560" height="240" viewBox="0 0 560 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="560" height="240" rx="28" fill="#F7F3EC"/>
+  <path d="M94 150C94 150 112 119 152 121C186 123 203 151 243 149C281 147 300 121 300 121" stroke="#111111" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M264 78L339 152" stroke="#111111" stroke-width="4" stroke-linecap="round"/>
+  <path d="M379 80L300 151" stroke="#111111" stroke-width="4" stroke-linecap="round"/>
+  <text x="70" y="140" fill="#111111" font-size="94" font-style="italic" font-family="'Brush Script MT', 'Segoe Script', cursive">Sisi</text>
+  <text x="238" y="143" fill="#111111" font-size="94" font-style="italic" font-family="'Brush Script MT', 'Segoe Script', cursive">Kopi</text>
+</svg>
