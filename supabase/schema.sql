@@ -5,6 +5,17 @@ create table if not exists public.branches (
   created_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.branch_business_settings (
+  branch_id text primary key references public.branches(id) on delete cascade,
+  store_name text not null,
+  receipt_footer text not null default 'Terima kasih sudah mampir ke Sisikopi.',
+  whatsapp text not null default '',
+  operating_hours text not null default '',
+  enabled_payment_methods jsonb not null default '["cash","qris"]'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create table if not exists public.app_users (
   id text primary key,
   name text not null,
@@ -103,7 +114,14 @@ before update on public.products
 for each row
 execute procedure public.set_updated_at();
 
+drop trigger if exists trg_branch_business_settings_updated_at on public.branch_business_settings;
+create trigger trg_branch_business_settings_updated_at
+before update on public.branch_business_settings
+for each row
+execute procedure public.set_updated_at();
+
 comment on table public.app_users is 'Akun internal POS. Untuk tahap awal auth dikelola via route handler server.';
+comment on table public.branch_business_settings is 'Settings bisnis per cabang untuk struk, metode pembayaran, dan identitas toko.';
 comment on table public.products is 'branch_id null berarti menu global untuk semua cabang.';
 comment on table public.order_items is 'Snapshot item saat transaksi dibuat, agar histori tidak berubah ketika produk diedit.';
 

@@ -26,6 +26,7 @@ import {
   login,
   logout,
   updateBranch,
+  updateBusinessSettings,
   setCurrentUserSession,
   updateUser,
   updateOrderFinancialStatus,
@@ -41,6 +42,11 @@ const DEFAULT_LOGIN_FORM = {
 
 const DEFAULT_PRODUCT_CATEGORY = "kopi";
 const DEFAULT_USER_ROLE = "kasir";
+const DEFAULT_ENABLED_PAYMENT_METHODS = ["cash", "qris"];
+const PAYMENT_METHOD_OPTIONS = [
+  { value: "cash", label: "Tunai", shortLabel: "Cash", description: "Bayar cash di kasir" },
+  { value: "qris", label: "QRIS", shortLabel: "QRIS", description: "Scan QRIS merchant" },
+];
 const ORDER_STATUSES = ["pending", "processing", "done"];
 const ORDER_STATUS_META = {
   pending: {
@@ -119,6 +125,19 @@ function createEmptyBranchDraft() {
   return {
     name: "",
     address: "",
+  };
+}
+
+function createBusinessSettingsDraft(branch) {
+  return {
+    storeName: branch?.storeName || branch?.name || "",
+    whatsapp: branch?.whatsapp || "",
+    operatingHours: branch?.operatingHours || "",
+    receiptFooter: branch?.receiptFooter || "Terima kasih sudah mampir ke Sisikopi.",
+    enabledPaymentMethods:
+      branch?.enabledPaymentMethods?.length
+        ? [...branch.enabledPaymentMethods]
+        : [...DEFAULT_ENABLED_PAYMENT_METHODS],
   };
 }
 
@@ -337,6 +356,48 @@ function normalizeBranchDraft(draft) {
   }
 
   return { name, address };
+}
+
+function normalizeBusinessSettingsDraft(draft, branch) {
+  const storeName = String(draft.storeName || branch?.name || "").trim();
+  const whatsapp = String(draft.whatsapp || "").trim();
+  const operatingHours = String(draft.operatingHours || "").trim();
+  const receiptFooter = String(draft.receiptFooter || "").trim();
+  const enabledPaymentMethods = PAYMENT_METHOD_OPTIONS
+    .map((method) => method.value)
+    .filter((method) => (draft.enabledPaymentMethods || []).includes(method));
+
+  if (!storeName) {
+    throw new Error("Nama toko wajib diisi.");
+  }
+
+  if (storeName.length > 80) {
+    throw new Error("Nama toko maksimal 80 karakter.");
+  }
+
+  if (whatsapp.length > 30) {
+    throw new Error("Nomor WhatsApp maksimal 30 karakter.");
+  }
+
+  if (operatingHours.length > 60) {
+    throw new Error("Jam operasional maksimal 60 karakter.");
+  }
+
+  if (receiptFooter.length > 160) {
+    throw new Error("Footer struk maksimal 160 karakter.");
+  }
+
+  if (!enabledPaymentMethods.length) {
+    throw new Error("Minimal satu metode pembayaran harus aktif.");
+  }
+
+  return {
+    storeName,
+    whatsapp,
+    operatingHours,
+    receiptFooter,
+    enabledPaymentMethods,
+  };
 }
 
 function getOrderStatusMeta(status) {
@@ -565,7 +626,18 @@ function escapeReceiptHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function buildReceiptHtml(order, branchName) {
+function buildReceiptHtml(order, branchDetails) {
+  const receiptStoreName = branchDetails?.storeName || branchDetails?.name || "Sisikopi";
+  const receiptBranchName = branchDetails?.name || "Sisikopi";
+  const receiptAddress = branchDetails?.address || "";
+  const receiptWhatsApp = branchDetails?.whatsapp || "";
+  const receiptHours = branchDetails?.operatingHours || "";
+  const receiptFooter =
+    branchDetails?.receiptFooter || "Terima kasih sudah mampir ke Sisikopi.";
+  const receiptMeta = [receiptAddress, receiptHours, receiptWhatsApp ? `WA ${receiptWhatsApp}` : ""]
+    .filter(Boolean)
+    .map((line) => `<div class="muted">${escapeReceiptHtml(line)}</div>`)
+    .join("");
   const itemsHtml = order.items
     .map((item) => {
       const optionsHtml = item.selectedOptionsText
@@ -627,8 +699,9 @@ function buildReceiptHtml(order, branchName) {
   <body>
     <div class="receipt">
       <div class="center">
-        <strong>Sisikopi</strong><br />
-        <span>${escapeReceiptHtml(branchName)}</span>
+        <strong>${escapeReceiptHtml(receiptStoreName)}</strong><br />
+        <span>${escapeReceiptHtml(receiptBranchName)}</span>
+        ${receiptMeta}
       </div>
       <div class="divider"></div>
       <div>No. Order: ${escapeReceiptHtml(order.orderNumber)}</div>
@@ -643,7 +716,7 @@ function buildReceiptHtml(order, branchName) {
         <span>${escapeReceiptHtml(formatRupiah(order.totalAmount))}</span>
       </div>
       <div class="divider"></div>
-      <div class="center muted">Terima kasih sudah mampir ke Sisikopi.</div>
+      <div class="center muted">${escapeReceiptHtml(receiptFooter)}</div>
     </div>
     <script>
       window.onload = () => {
@@ -916,6 +989,7 @@ function AdminScreen({
   isSubmitting,
   onLogout,
   onSaveBranch,
+  onSaveBusinessSettings,
   onDeleteBranch,
   onSaveUser,
   onDeleteUser,
@@ -946,6 +1020,11 @@ function AdminScreen({
   const [editingBranchId, setEditingBranchId] = useState("");
   const [branchDraft, setBranchDraft] = useState(() => createEmptyBranchDraft());
   const [branchFormError, setBranchFormError] = useState("");
+  const activeBranch = branches.find((branch) => branch.id === currentBranchId) || null;
+  const [businessSettingsDraft, setBusinessSettingsDraft] = useState(() =>
+    createBusinessSettingsDraft(activeBranch),
+  );
+  const [businessSettingsFormError, setBusinessSettingsFormError] = useState("");
   const [reportMode, setReportMode] = useState("single");
   const [reportDate, setReportDate] = useState(todayDate);
   const [reportRange, setReportRange] = useState({
@@ -1062,6 +1141,11 @@ function AdminScreen({
     reportValidationMessage,
   ]);
 
+  useEffect(() => {
+    setBusinessSettingsDraft(createBusinessSettingsDraft(activeBranch));
+    setBusinessSettingsFormError("");
+  }, [activeBranch]);
+
   function resetProductForm() {
     setEditingProductId("");
     setProductDraft(createEmptyProductDraft(currentBranchId));
@@ -1096,6 +1180,11 @@ function AdminScreen({
     setEditingBranchId("");
     setBranchDraft(createEmptyBranchDraft());
     setBranchFormError("");
+  }
+
+  function resetBusinessSettingsForm() {
+    setBusinessSettingsDraft(createBusinessSettingsDraft(activeBranch));
+    setBusinessSettingsFormError("");
   }
 
   function handleReportModeChange(nextMode) {
@@ -1191,6 +1280,25 @@ function AdminScreen({
       ...currentDraft,
       [field]: value,
     }));
+  }
+
+  function handleBusinessSettingsDraftChange(field, value) {
+    setBusinessSettingsDraft((currentDraft) => ({
+      ...currentDraft,
+      [field]: value,
+    }));
+  }
+
+  function handleTogglePaymentMethod(method) {
+    setBusinessSettingsDraft((currentDraft) => {
+      const nextMethods = currentDraft.enabledPaymentMethods.includes(method)
+        ? currentDraft.enabledPaymentMethods.filter((currentMethod) => currentMethod !== method)
+        : [...currentDraft.enabledPaymentMethods, method];
+      return {
+        ...currentDraft,
+        enabledPaymentMethods: nextMethods,
+      };
+    });
   }
 
   function handleOptionGroupChange(groupIndex, field, value) {
@@ -1346,6 +1454,19 @@ function AdminScreen({
       resetBranchForm();
     } catch (submitError) {
       setBranchFormError(submitError.message || "Cabang gagal disimpan.");
+    }
+  }
+
+  async function handleSubmitBusinessSettings(event) {
+    event.preventDefault();
+    setBusinessSettingsFormError("");
+
+    try {
+      const nextSettings = normalizeBusinessSettingsDraft(businessSettingsDraft, activeBranch);
+      await onSaveBusinessSettings(currentBranchId, nextSettings);
+      resetBusinessSettingsForm();
+    } catch (submitError) {
+      setBusinessSettingsFormError(submitError.message || "Settings bisnis gagal disimpan.");
     }
   }
 
@@ -1710,6 +1831,113 @@ function AdminScreen({
                 </tbody>
               </table>
             </div>
+          </article>
+
+          <article className="card">
+            <div className="card-heading">
+              <h2>Settings Bisnis</h2>
+              <p>Atur identitas toko, footer struk, kontak, dan metode pembayaran cabang aktif.</p>
+            </div>
+
+            {businessSettingsFormError ? (
+              <div className="status-banner is-error">{businessSettingsFormError}</div>
+            ) : null}
+
+            <form className="product-form" onSubmit={handleSubmitBusinessSettings}>
+              <div className="product-form-grid">
+                <div className="form-group">
+                  <label htmlFor="business-store-name">Nama Toko</label>
+                  <input
+                    id="business-store-name"
+                    className="input"
+                    required
+                    maxLength={80}
+                    value={businessSettingsDraft.storeName}
+                    onChange={(event) =>
+                      handleBusinessSettingsDraftChange("storeName", event.target.value)
+                    }
+                    placeholder="Misal: Sisi Kopi Sutomo"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="business-whatsapp">WhatsApp</label>
+                  <input
+                    id="business-whatsapp"
+                    className="input"
+                    maxLength={30}
+                    value={businessSettingsDraft.whatsapp}
+                    onChange={(event) =>
+                      handleBusinessSettingsDraftChange("whatsapp", event.target.value)
+                    }
+                    placeholder="Misal: 0812xxxxxxx"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="business-hours">Jam Operasional</label>
+                  <input
+                    id="business-hours"
+                    className="input"
+                    maxLength={60}
+                    value={businessSettingsDraft.operatingHours}
+                    onChange={(event) =>
+                      handleBusinessSettingsDraftChange("operatingHours", event.target.value)
+                    }
+                    placeholder="Misal: 08.00 - 22.00"
+                  />
+                </div>
+
+                <div className="form-group product-form-full">
+                  <label htmlFor="business-receipt-footer">Footer Struk</label>
+                  <textarea
+                    id="business-receipt-footer"
+                    className="input business-textarea"
+                    maxLength={160}
+                    value={businessSettingsDraft.receiptFooter}
+                    onChange={(event) =>
+                      handleBusinessSettingsDraftChange("receiptFooter", event.target.value)
+                    }
+                    placeholder="Pesan pendek di bagian bawah struk"
+                  />
+                </div>
+
+                <div className="form-group product-form-full">
+                  <label>Metode Pembayaran Aktif</label>
+                  <div className="settings-toggle-grid">
+                    {PAYMENT_METHOD_OPTIONS.map((method) => {
+                      const enabled = businessSettingsDraft.enabledPaymentMethods.includes(
+                        method.value,
+                      );
+                      return (
+                        <button
+                          key={method.value}
+                          type="button"
+                          className={`settings-toggle-card ${enabled ? "active" : ""}`}
+                          onClick={() => handleTogglePaymentMethod(method.value)}
+                        >
+                          <strong>{method.shortLabel}</strong>
+                          <span>{method.description}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="product-form-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={resetBusinessSettingsForm}
+                >
+                  Reset Settings
+                </button>
+                <button className="btn btn-primary" disabled={isSubmitting}>
+                  {isSubmitting ? "Menyimpan..." : "Simpan Settings"}
+                </button>
+              </div>
+            </form>
           </article>
 
           <article className="card">
@@ -2484,6 +2712,7 @@ function AdminScreen({
 
 function CashierScreen({
   branchName,
+  branchDetails,
   products,
   activeCategory,
   cart,
@@ -2512,6 +2741,9 @@ function CashierScreen({
     status,
     count: getOrderStatusCount(todayOrders, status),
   }));
+  const enabledPaymentMethods = PAYMENT_METHOD_OPTIONS.filter((method) =>
+    (branchDetails?.enabledPaymentMethods || DEFAULT_ENABLED_PAYMENT_METHODS).includes(method.value),
+  );
   const visibleProducts =
     activeCategory === "all"
       ? availableProducts
@@ -2605,25 +2837,24 @@ function CashierScreen({
 
           <div className="cart-footer">
             <div className="payment-methods">
-              <button
-                className={`payment-method ${
-                  paymentMethod === "cash" ? "selected" : ""
-                }`}
-                onClick={() => onPaymentChange("cash")}
-              >
-                <div className="payment-method-icon">Cash</div>
-                <div className="payment-method-label">Tunai</div>
-              </button>
-              <button
-                className={`payment-method ${
-                  paymentMethod === "qris" ? "selected" : ""
-                }`}
-                onClick={() => onPaymentChange("qris")}
-              >
-                <div className="payment-method-icon">QRIS</div>
-                <div className="payment-method-label">Scan</div>
-              </button>
+              {enabledPaymentMethods.map((method) => (
+                <button
+                  key={method.value}
+                  className={`payment-method ${
+                    paymentMethod === method.value ? "selected" : ""
+                  }`}
+                  onClick={() => onPaymentChange(method.value)}
+                >
+                  <div className="payment-method-icon">{method.shortLabel}</div>
+                  <div className="payment-method-label">{method.label}</div>
+                </button>
+              ))}
             </div>
+            {enabledPaymentMethods.length === 1 ? (
+              <p className="helper-text">
+                Cabang ini hanya mengaktifkan pembayaran {enabledPaymentMethods[0].label}.
+              </p>
+            ) : null}
 
             <div className="cart-total">
               <span>Total</span>
@@ -2782,11 +3013,11 @@ export default function Home() {
     showToast(type, title || (type === "info" ? "Informasi" : "Berhasil"), message);
   }
 
-  function handlePrintReceipt(order, branchNameOverride) {
+  function handlePrintReceipt(order, branchOverride) {
     const activeBranch =
-      branchNameOverride ||
-      branches.find((branch) => branch.id === order.branchId)?.name ||
-      "Sisikopi";
+      branchOverride ||
+      branches.find((branch) => branch.id === order.branchId) ||
+      null;
 
     const printWindow = window.open("", "_blank", "width=420,height=640");
     if (!printWindow) {
@@ -3122,6 +3353,29 @@ export default function Home() {
     }
   }
 
+  async function handleSaveBusinessSettings(branchId, settingsData) {
+    if (!currentUser) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    clearFeedback();
+
+    try {
+      const nextBranches = await updateBusinessSettings(branchId, settingsData);
+      setBranches(nextBranches);
+      await refreshSessionData(currentUser);
+      reportNotice("Settings bisnis berhasil diperbarui.", {
+        title: "Settings disimpan",
+      });
+    } catch (settingsError) {
+      reportError(settingsError.message || "Settings bisnis gagal disimpan.");
+      throw settingsError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleDeleteBranch(branchId) {
     if (!currentUser) {
       return;
@@ -3320,13 +3574,27 @@ export default function Home() {
       reportNotice("Pesanan masuk ke antrian pending.", {
         title: "Pesanan tersimpan",
       });
-      handlePrintReceipt(completedOrder, currentBranch?.name || "Sisikopi");
+      handlePrintReceipt(completedOrder, currentBranch);
     } catch (checkoutError) {
       reportError(checkoutError.message || "Checkout gagal diproses.");
     } finally {
       setIsSubmitting(false);
     }
   }
+
+  const currentBranch = currentUser
+    ? branches.find((branch) => branch.id === currentUser.branchId) || branches[0]
+    : null;
+  const enabledPaymentMethods =
+    currentBranch?.enabledPaymentMethods?.length
+      ? currentBranch.enabledPaymentMethods
+      : DEFAULT_ENABLED_PAYMENT_METHODS;
+
+  useEffect(() => {
+    if (!enabledPaymentMethods.includes(paymentMethod)) {
+      setPaymentMethod(enabledPaymentMethods[0] || "cash");
+    }
+  }, [enabledPaymentMethods, paymentMethod]);
 
   if (isBooting) {
     return (
@@ -3357,9 +3625,6 @@ export default function Home() {
     );
   }
 
-  const currentBranch =
-    branches.find((branch) => branch.id === currentUser.branchId) || branches[0];
-
   if (currentUser.role === "admin") {
     return (
       <>
@@ -3376,6 +3641,7 @@ export default function Home() {
           isSubmitting={isSubmitting}
           onLogout={handleLogout}
           onSaveBranch={handleSaveBranch}
+          onSaveBusinessSettings={handleSaveBusinessSettings}
           onDeleteBranch={handleDeleteBranch}
           onSaveUser={handleSaveUser}
           onDeleteUser={handleDeleteUser}
@@ -3397,6 +3663,7 @@ export default function Home() {
     <>
       <CashierScreen
         branchName={currentBranch?.name || "Cabang"}
+        branchDetails={currentBranch}
         products={products}
         activeCategory={activeCategory}
         cart={cart}

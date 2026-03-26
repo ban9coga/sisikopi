@@ -41,8 +41,10 @@ async function loadStoreModule() {
 
 const {
   createOrder,
+  getBranches,
   getOrdersByDate,
   getSummaryByRange,
+  updateBusinessSettings,
   updateOrderFinancialStatus,
   updateOrderStatus,
 } = await loadStoreModule();
@@ -276,6 +278,39 @@ const testCases = [
       assert.throws(
         () => updateOrderFinancialStatus(doneOrder.id, "void", "Sudah selesai"),
         /harus diproses sebagai refund/,
+      );
+    },
+  },
+  {
+    name: "business settings update controls branch payment methods",
+    run() {
+      resetStorage();
+
+      const beforeBranches = getBranches();
+      assert.deepEqual(beforeBranches[0].enabledPaymentMethods, ["cash", "qris"]);
+
+      const updatedBranches = updateBusinessSettings("branch-1", {
+        storeName: "Sisi Kopi Sutomo",
+        whatsapp: "08123456789",
+        operatingHours: "08.00 - 22.00",
+        receiptFooter: "Terima kasih, sampai jumpa lagi.",
+        enabledPaymentMethods: ["cash"],
+      });
+
+      const updatedBranch = updatedBranches.find((branch) => branch.id === "branch-1");
+      assert.equal(updatedBranch.storeName, "Sisi Kopi Sutomo");
+      assert.deepEqual(updatedBranch.enabledPaymentMethods, ["cash"]);
+
+      assert.throws(
+        () =>
+          createOrder({
+            branchId: "branch-1",
+            cashierId: "user-2",
+            cashierName: "Kasir 1",
+            paymentMethod: "qris",
+            items: [{ productId: "p11", quantity: 1, selectedOptions: [] }],
+          }),
+        /Metode pembayaran ini sedang dinonaktifkan/,
       );
     },
   },
