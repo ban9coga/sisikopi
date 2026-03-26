@@ -43,6 +43,7 @@ const {
   createOrder,
   getOrdersByDate,
   getSummaryByRange,
+  updateOrderFinancialStatus,
   updateOrderStatus,
 } = await loadStoreModule();
 
@@ -184,6 +185,50 @@ const testCases = [
     },
   },
   {
+    name: "void and refund orders are excluded from omzet but remain in history counts",
+    run() {
+      resetStorage();
+
+      const pendingOrder = createOrder({
+        branchId: "branch-1",
+        cashierId: "user-2",
+        cashierName: "Kasir 1",
+        paymentMethod: "cash",
+        items: [{ productId: "p11", quantity: 1, selectedOptions: [] }],
+      });
+      const doneOrder = createOrder({
+        branchId: "branch-1",
+        cashierId: "user-2",
+        cashierName: "Kasir 1",
+        paymentMethod: "qris",
+        items: [{ productId: "p12", quantity: 1, selectedOptions: [] }],
+      });
+
+      updateOrderStatus(doneOrder.id, "done");
+      updateOrderFinancialStatus(pendingOrder.id, "void", "Batal oleh pelanggan");
+      updateOrderFinancialStatus(doneOrder.id, "refunded", "Salah input");
+
+      const today = pendingOrder.createdAt.split("T")[0];
+      const summary = getSummaryByRange("branch-1", today, today);
+      const todayOrders = getOrdersByDate("branch-1", today, today);
+      const storedPending = todayOrders.find((order) => order.id === pendingOrder.id);
+      const storedDone = todayOrders.find((order) => order.id === doneOrder.id);
+
+      assert.equal(summary.totalOrders, 2);
+      assert.equal(summary.totalTransactions, 0);
+      assert.equal(summary.totalRevenue, 0);
+      assert.deepEqual(summary.financialBreakdown, {
+        active: 0,
+        void: 1,
+        refunded: 1,
+      });
+      assert.equal(storedPending.financialStatus, "void");
+      assert.equal(storedPending.voidReason, "Batal oleh pelanggan");
+      assert.equal(storedDone.financialStatus, "refunded");
+      assert.equal(storedDone.refundReason, "Salah input");
+    },
+  },
+  {
     name: "updateOrderStatus rejects unknown workflow values",
     run() {
       resetStorage();
@@ -199,6 +244,38 @@ const testCases = [
       assert.throws(
         () => updateOrderStatus(order.id, "cancelled"),
         /Status order tidak valid/,
+      );
+    },
+  },
+  {
+    name: "updateOrderFinancialStatus enforces workflow rules",
+    run() {
+      resetStorage();
+
+      const pendingOrder = createOrder({
+        branchId: "branch-1",
+        cashierId: "user-2",
+        cashierName: "Kasir 1",
+        paymentMethod: "cash",
+        items: [{ productId: "p11", quantity: 1, selectedOptions: [] }],
+      });
+      const doneOrder = createOrder({
+        branchId: "branch-1",
+        cashierId: "user-2",
+        cashierName: "Kasir 1",
+        paymentMethod: "cash",
+        items: [{ productId: "p11", quantity: 1, selectedOptions: [] }],
+      });
+
+      updateOrderStatus(doneOrder.id, "done");
+
+      assert.throws(
+        () => updateOrderFinancialStatus(pendingOrder.id, "refunded", "Belum selesai"),
+        /Hanya order selesai yang bisa direfund/,
+      );
+      assert.throws(
+        () => updateOrderFinancialStatus(doneOrder.id, "void", "Sudah selesai"),
+        /harus diproses sebagai refund/,
       );
     },
   },

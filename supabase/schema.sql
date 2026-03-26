@@ -55,8 +55,13 @@ create table if not exists public.orders (
   payment_method text not null check (payment_method in ('cash', 'qris')),
   total_amount integer not null default 0 check (total_amount >= 0),
   status text not null check (status in ('pending', 'processing', 'done')),
+  financial_status text not null default 'active' check (financial_status in ('active', 'void', 'refunded')),
   created_at timestamptz not null default timezone('utc', now()),
-  completed_at timestamptz null
+  completed_at timestamptz null,
+  voided_at timestamptz null,
+  refunded_at timestamptz null,
+  void_reason text null,
+  refund_reason text null
 );
 
 create table if not exists public.order_items (
@@ -77,6 +82,7 @@ create index if not exists idx_products_branch on public.products(branch_id);
 create index if not exists idx_products_category on public.products(category);
 create index if not exists idx_orders_branch_created_at on public.orders(branch_id, created_at desc);
 create index if not exists idx_orders_status on public.orders(status);
+create index if not exists idx_orders_financial_status on public.orders(financial_status);
 create index if not exists idx_order_items_order on public.order_items(order_id);
 create index if not exists idx_option_groups_product on public.product_option_groups(product_id, sort_order);
 create index if not exists idx_option_choices_group on public.product_option_choices(option_group_id, sort_order);

@@ -144,6 +144,15 @@ h1, h2, h3, h4, h5, h6 {
   background: rgba(74, 222, 128, 0.2);
 }
 
+.btn-warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid rgba(195, 137, 47, 0.22);
+}
+.btn-warning:hover {
+  background: rgba(195, 137, 47, 0.2);
+}
+
 .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
 .btn-lg { padding: 14px 28px; font-size: 1rem; }
 .btn-icon {
@@ -1097,7 +1106,7 @@ select.input {
 
 .report-breakdown-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -1119,6 +1128,10 @@ select.input {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.history-filter-grid {
+  margin-bottom: 16px;
 }
 .chart-placeholder {
   background: var(--bg-card);

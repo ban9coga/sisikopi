@@ -28,6 +28,7 @@ import {
   updateBranch,
   setCurrentUserSession,
   updateUser,
+  updateOrderFinancialStatus,
   updateOrderStatus,
   updateProduct,
 } from "@/lib/store";
@@ -58,6 +59,20 @@ const ORDER_STATUS_META = {
     description: "Siap diserahkan",
   },
 };
+const ORDER_FINANCIAL_META = {
+  active: {
+    label: "Aktif",
+    badgeClass: "badge-info",
+  },
+  void: {
+    label: "Void",
+    badgeClass: "badge-warning",
+  },
+  refunded: {
+    label: "Refund",
+    badgeClass: "badge-danger",
+  },
+};
 
 function createEmptySummary() {
   return {
@@ -68,6 +83,7 @@ function createEmptySummary() {
     topMenu: [],
     paymentBreakdown: { cash: 0, qris: 0 },
     statusBreakdown: { pending: 0, processing: 0, done: 0 },
+    financialBreakdown: { active: 0, void: 0, refunded: 0 },
     orders: [],
     startDate: "",
     endDate: "",
@@ -327,6 +343,10 @@ function getOrderStatusMeta(status) {
   return ORDER_STATUS_META[status] || ORDER_STATUS_META.pending;
 }
 
+function getOrderFinancialMeta(financialStatus) {
+  return ORDER_FINANCIAL_META[financialStatus] || ORDER_FINANCIAL_META.active;
+}
+
 function getTodayDateValue() {
   return new Date().toISOString().split("T")[0];
 }
@@ -426,6 +446,56 @@ function getNextOrderStatuses(currentStatus) {
   }
 
   return ["processing"];
+}
+
+function canVoidOrder(order) {
+  return (order.financialStatus || "active") === "active" && order.status !== "done";
+}
+
+function canRefundOrder(order) {
+  return (order.financialStatus || "active") === "active" && order.status === "done";
+}
+
+function escapeCsvValue(value) {
+  const stringValue = String(value ?? "");
+  if (/[",\n]/.test(stringValue)) {
+    return `"${stringValue.replaceAll('"', '""')}"`;
+  }
+
+  return stringValue;
+}
+
+function buildOrderHistoryCsv(orders, branches) {
+  const rows = [
+    [
+      "Order Number",
+      "Cabang",
+      "Kasir",
+      "Waktu",
+      "Lifecycle Status",
+      "Financial Status",
+      "Payment",
+      "Total",
+      "Items",
+      "Catatan Void/Refund",
+    ],
+    ...orders.map((order) => [
+      order.orderNumber,
+      branches.find((branch) => branch.id === order.branchId)?.name || order.branchId,
+      order.cashierName,
+      order.createdAt,
+      getOrderStatusMeta(order.status).label,
+      getOrderFinancialMeta(order.financialStatus || "active").label,
+      order.paymentMethod.toUpperCase(),
+      order.totalAmount,
+      getOrderItemsSummary(order),
+      order.voidReason || order.refundReason || "",
+    ]),
+  ];
+
+  return rows
+    .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+    .join("\n");
 }
 
 function getCategoryOptions(products) {
@@ -803,7 +873,17 @@ function OrderStatusBadge({ status }) {
   return <span className={`badge ${meta.badgeClass}`}>{meta.label}</span>;
 }
 
+function OrderFinancialBadge({ financialStatus }) {
+  const meta = getOrderFinancialMeta(financialStatus || "active");
+
+  return <span className={`badge ${meta.badgeClass}`}>{meta.label}</span>;
+}
+
 function OrderWorkflowActions({ order, isSubmitting, onStatusChange }) {
+  if ((order.financialStatus || "active") !== "active") {
+    return null;
+  }
+
   const nextStatuses = getNextOrderStatuses(order.status);
 
   return (
@@ -827,6 +907,7 @@ function AdminScreen({
   currentUser,
   branchName,
   currentBranchId,
+  reportRefreshKey,
   branches,
   users,
   products,
@@ -841,6 +922,7 @@ function AdminScreen({
   onSaveProduct,
   onDeleteProduct,
   onOrderStatusChange,
+  onOrderFinancialStatusChange,
   onPrintReceipt,
   onToggleProductAvailability,
   error,
@@ -870,6 +952,9 @@ function AdminScreen({
     startDate: todayDate,
     endDate: todayDate,
   });
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyStatusFilter, setHistoryStatusFilter] = useState("all");
+  const [historyFinancialFilter, setHistoryFinancialFilter] = useState("all");
   const [reportSummary, setReportSummary] = useState(() => createEmptySummary());
   const [reportOrders, setReportOrders] = useState([]);
   const [reportLoading, setReportLoading] = useState(false);
@@ -896,6 +981,20 @@ function AdminScreen({
       : !reportRange.startDate || !reportRange.endDate
         ? "Lengkapi tanggal awal dan akhir laporan."
         : "";
+  const filteredReportOrders = reportOrders.filter((order) => {
+    const normalizedSearch = historySearch.trim().toLowerCase();
+    const matchesSearch =
+      !normalizedSearch ||
+      order.orderNumber.toLowerCase().includes(normalizedSearch) ||
+      order.cashierName.toLowerCase().includes(normalizedSearch) ||
+      getOrderItemsSummary(order).toLowerCase().includes(normalizedSearch);
+    const matchesStatus =
+      historyStatusFilter === "all" || order.status === historyStatusFilter;
+    const matchesFinancial =
+      historyFinancialFilter === "all" ||
+      (order.financialStatus || "active") === historyFinancialFilter;
+    return matchesSearch && matchesStatus && matchesFinancial;
+  });
 
   useEffect(() => {
     let ignore = false;
@@ -959,6 +1058,7 @@ function AdminScreen({
     currentBranchId,
     normalizedReportRange.endDate,
     normalizedReportRange.startDate,
+    reportRefreshKey,
     reportValidationMessage,
   ]);
 
@@ -966,6 +1066,24 @@ function AdminScreen({
     setEditingProductId("");
     setProductDraft(createEmptyProductDraft(currentBranchId));
     setFormError("");
+  }
+
+  function handleExportReport() {
+    const csvContent = buildOrderHistoryCsv(filteredReportOrders, branches);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const fileSuffix =
+      normalizedReportRange.startDate === normalizedReportRange.endDate
+        ? normalizedReportRange.startDate
+        : `${normalizedReportRange.startDate}_sd_${normalizedReportRange.endDate}`;
+
+    link.href = url;
+    link.download = `laporan-sisikopi-${fileSuffix}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   function resetUserForm() {
@@ -1862,6 +1980,7 @@ function AdminScreen({
                     <div className="helper-text order-snippet">{getOrderItemsSummary(order)}</div>
                     <div className="list-item-meta">
                       <OrderStatusBadge status={order.status} />
+                      <OrderFinancialBadge financialStatus={order.financialStatus} />
                       <span className="badge badge-accent">
                         {order.paymentMethod.toUpperCase()}
                       </span>
@@ -1871,6 +1990,28 @@ function AdminScreen({
                       isSubmitting={isSubmitting}
                       onStatusChange={onOrderStatusChange}
                     />
+                    <div className="table-actions">
+                      {canVoidOrder(order) ? (
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-sm"
+                          disabled={isSubmitting}
+                          onClick={() => onOrderFinancialStatusChange(order, "void")}
+                        >
+                          Void
+                        </button>
+                      ) : null}
+                      {canRefundOrder(order) ? (
+                        <button
+                          type="button"
+                          className="btn btn-warning btn-sm"
+                          disabled={isSubmitting}
+                          onClick={() => onOrderFinancialStatusChange(order, "refunded")}
+                        >
+                          Refund
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                   <div className="list-item-side">
                     <div className="list-item-value">{formatRupiah(order.totalAmount)}</div>
@@ -2060,9 +2201,21 @@ function AdminScreen({
 
             <div className="report-period-label">
               <strong>{reportTitle}</strong>
-              <span className="helper-text">
-                {reportLoading ? "Memuat laporan..." : `${reportOrders.length} transaksi tercatat`}
-              </span>
+              <div className="table-actions">
+                <span className="helper-text">
+                  {reportLoading
+                    ? "Memuat laporan..."
+                    : `${filteredReportOrders.length} transaksi tercatat`}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={reportLoading || !filteredReportOrders.length}
+                  onClick={handleExportReport}
+                >
+                  Export CSV
+                </button>
+              </div>
             </div>
 
             <div className="report-summary-grid">
@@ -2098,6 +2251,18 @@ function AdminScreen({
               </div>
 
               <div className="report-breakdown-card">
+                <h3>Status Finansial</h3>
+                <div className="summary-list">
+                  {Object.keys(ORDER_FINANCIAL_META).map((financialStatus) => (
+                    <div className="summary-row" key={financialStatus}>
+                      <OrderFinancialBadge financialStatus={financialStatus} />
+                      <strong>{reportSummary.financialBreakdown?.[financialStatus] || 0}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="report-breakdown-card">
                 <h3>Pembayaran Selesai</h3>
                 <div className="summary-list">
                   <div className="summary-row">
@@ -2113,12 +2278,56 @@ function AdminScreen({
             </div>
 
             <div className="card-heading report-subheading">
-              <h3>Transaksi Periode</h3>
-              <p>Seluruh order pada periode terpilih, termasuk yang masih pending atau diproses.</p>
+              <h3>Histori Order</h3>
+              <p>Seluruh order pada periode terpilih, lengkap dengan filter dan aksi void/refund.</p>
+            </div>
+            <div className="report-filter-grid history-filter-grid">
+              <div className="form-group">
+                <label htmlFor="history-search">Cari Order</label>
+                <input
+                  id="history-search"
+                  className="input"
+                  value={historySearch}
+                  onChange={(event) => setHistorySearch(event.target.value)}
+                  placeholder="Nomor order, kasir, atau item"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="history-status-filter">Status Workflow</label>
+                <select
+                  id="history-status-filter"
+                  className="input"
+                  value={historyStatusFilter}
+                  onChange={(event) => setHistoryStatusFilter(event.target.value)}
+                >
+                  <option value="all">Semua status</option>
+                  {ORDER_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {getOrderStatusMeta(status).label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label htmlFor="history-financial-filter">Status Finansial</label>
+                <select
+                  id="history-financial-filter"
+                  className="input"
+                  value={historyFinancialFilter}
+                  onChange={(event) => setHistoryFinancialFilter(event.target.value)}
+                >
+                  <option value="all">Semua status</option>
+                  {Object.entries(ORDER_FINANCIAL_META).map(([status, meta]) => (
+                    <option key={status} value={status}>
+                      {meta.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             {reportLoading ? (
               <p className="empty-state">Memuat laporan periode...</p>
-            ) : reportOrders.length ? (
+            ) : filteredReportOrders.length ? (
               <div className="table-wrap">
                 <table className="menu-table report-table">
                   <thead>
@@ -2126,12 +2335,14 @@ function AdminScreen({
                       <th>Order</th>
                       <th>Waktu</th>
                       <th>Status</th>
+                      <th>Finansial</th>
                       <th>Bayar</th>
                       <th>Total</th>
+                      <th>Aksi</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {reportOrders.map((order) => (
+                    {filteredReportOrders.map((order) => (
                       <tr key={`report-${order.id}`}>
                         <td>
                           <div className="report-order-cell">
@@ -2150,18 +2361,59 @@ function AdminScreen({
                           <OrderStatusBadge status={order.status} />
                         </td>
                         <td>
+                          <div className="report-order-cell">
+                            <OrderFinancialBadge financialStatus={order.financialStatus} />
+                            {order.voidReason || order.refundReason ? (
+                              <span className="helper-text">
+                                {order.voidReason || order.refundReason}
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td>
                           <span className="badge badge-accent">
                             {order.paymentMethod.toUpperCase()}
                           </span>
                         </td>
                         <td>{formatRupiah(order.totalAmount)}</td>
+                        <td>
+                          <div className="table-actions">
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => onPrintReceipt(order)}
+                            >
+                              Print
+                            </button>
+                            {canVoidOrder(order) ? (
+                              <button
+                                type="button"
+                                className="btn btn-danger btn-sm"
+                                disabled={isSubmitting}
+                                onClick={() => onOrderFinancialStatusChange(order, "void")}
+                              >
+                                Void
+                              </button>
+                            ) : null}
+                            {canRefundOrder(order) ? (
+                              <button
+                                type="button"
+                                className="btn btn-warning btn-sm"
+                                disabled={isSubmitting}
+                                onClick={() => onOrderFinancialStatusChange(order, "refunded")}
+                              >
+                                Refund
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             ) : (
-              <p className="empty-state">Belum ada transaksi pada periode yang dipilih.</p>
+              <p className="empty-state">Belum ada histori order yang cocok dengan filter ini.</p>
             )}
           </article>
 
@@ -2409,6 +2661,7 @@ function CashierScreen({
                     <div className="queue-item-title">
                       <span className="queue-item-number">#{order.orderNumber}</span>
                       <OrderStatusBadge status={order.status} />
+                      <OrderFinancialBadge financialStatus={order.financialStatus} />
                     </div>
                     <span className="queue-item-time">{formatTime(order.createdAt)}</span>
                   </div>
@@ -2453,6 +2706,7 @@ function CashierScreen({
 export default function Home() {
   const [isBooting, setIsBooting] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [reportRefreshKey, setReportRefreshKey] = useState(0);
   const [branches, setBranches] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
@@ -2983,6 +3237,7 @@ export default function Home() {
     try {
       await updateOrderStatus(order.id, nextStatus);
       await refreshSessionData(currentUser);
+      setReportRefreshKey((currentValue) => currentValue + 1);
       reportNotice(
         `Order #${order.orderNumber} dipindahkan ke ${getOrderStatusMeta(nextStatus).label}.`,
         {
@@ -2991,6 +3246,51 @@ export default function Home() {
       );
     } catch (orderError) {
       reportError(orderError.message || "Status order gagal diperbarui.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleOrderFinancialStatusChange(order, nextFinancialStatus) {
+    if (!currentUser) {
+      return;
+    }
+
+    const actionLabel = nextFinancialStatus === "void" ? "void" : "refund";
+    const defaultReason =
+      nextFinancialStatus === "void" ? order.voidReason || "" : order.refundReason || "";
+    const reason = window.prompt(
+      `Masukkan alasan ${actionLabel} untuk order #${order.orderNumber}.`,
+      defaultReason,
+    );
+
+    if (reason === null) {
+      return;
+    }
+
+    const normalizedReason = reason.trim();
+    if (!normalizedReason) {
+      reportError(`Alasan ${actionLabel} wajib diisi.`);
+      return;
+    }
+
+    setIsSubmitting(true);
+    clearFeedback();
+
+    try {
+      await updateOrderFinancialStatus(order.id, nextFinancialStatus, normalizedReason);
+      await refreshSessionData(currentUser);
+      setReportRefreshKey((currentValue) => currentValue + 1);
+      reportNotice(
+        nextFinancialStatus === "void"
+          ? `Order #${order.orderNumber} berhasil di-void.`
+          : `Order #${order.orderNumber} berhasil direfund.`,
+        {
+          title: nextFinancialStatus === "void" ? "Order di-void" : "Order direfund",
+        },
+      );
+    } catch (orderError) {
+      reportError(orderError.message || `Order gagal diproses sebagai ${actionLabel}.`);
     } finally {
       setIsSubmitting(false);
     }
@@ -3016,6 +3316,7 @@ export default function Home() {
       setCart([]);
       setPaymentMethod("cash");
       await refreshSessionData(currentUser);
+      setReportRefreshKey((currentValue) => currentValue + 1);
       reportNotice("Pesanan masuk ke antrian pending.", {
         title: "Pesanan tersimpan",
       });
@@ -3066,6 +3367,7 @@ export default function Home() {
           currentUser={currentUser}
           branchName={currentBranch?.name || "Cabang"}
           currentBranchId={currentUser.branchId}
+          reportRefreshKey={reportRefreshKey}
           branches={branches}
           users={users}
           products={products}
@@ -3080,6 +3382,7 @@ export default function Home() {
           onSaveProduct={handleSaveProduct}
           onDeleteProduct={handleDeleteProduct}
           onOrderStatusChange={handleOrderStatusChange}
+          onOrderFinancialStatusChange={handleOrderFinancialStatusChange}
           onPrintReceipt={handlePrintReceipt}
           onToggleProductAvailability={handleToggleProductAvailability}
           error={error}
